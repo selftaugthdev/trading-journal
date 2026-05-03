@@ -1,0 +1,7 @@
+node_modules/
+data/journal.db
+data/journal.db-shm
+data/journal.db-wal
+client/dist/
+.env
+*.log
