@@ -23,6 +23,11 @@ export const api = {
   importTrades: (csv, format) => request('/trades/import', { method: 'POST', body: { csv, format } }),
   exportTrades: () => fetch('/api/trades/export').then(r => r.blob()),
 
+  // Market
+  getQuotes: () => request('/market/quotes'),
+  getCalendar: () => request('/market/calendar'),
+  refreshCalendar: () => request('/market/calendar/refresh', { method: 'POST' }),
+
   // Accounts
   getAccounts: () => request('/accounts'),
   createAccount: (data) => request('/accounts', { method: 'POST', body: data }),

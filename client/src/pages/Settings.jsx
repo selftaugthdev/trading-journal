@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, Check, X, Save } from 'lucide-react';
+import { Plus, Trash2, Edit2, Check, X, Save, ExternalLink, Eye, EyeOff } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { cn } from '../lib/utils.js';
 
@@ -181,7 +181,9 @@ export default function Settings() {
     tick_value_nq: '5',
     tick_value_mnq: '0.50',
     csv_format: 'manual',
+    finnhub_api_key: '',
   });
+  const [showApiKey, setShowApiKey] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
 
   useEffect(() => {
@@ -311,6 +313,44 @@ export default function Settings() {
             <option value="tradovate">Tradovate</option>
             <option value="rithmic">Rithmic</option>
           </select>
+        </div>
+
+      </div>
+
+      {/* Market Data */}
+      <div className="card space-y-4">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-200">Market Data</h2>
+          <p className="text-xs text-slate-500 mt-0.5">API keys for live market prices and economic calendar</p>
+        </div>
+
+        <div className="space-y-2">
+          <label className="label flex items-center gap-2">
+            Finnhub API Key
+            <a href="https://finnhub.io/register" target="_blank" rel="noreferrer"
+              className="text-violet-400 hover:text-violet-300 inline-flex items-center gap-1 text-[11px]">
+              Get free key <ExternalLink size={10} />
+            </a>
+          </label>
+          <div className="relative">
+            <input
+              type={showApiKey ? 'text' : 'password'}
+              className="input font-mono pr-10"
+              placeholder="e.g. cq3abc123def456..."
+              value={settings.finnhub_api_key}
+              onChange={e => setSettings(s => ({ ...s, finnhub_api_key: e.target.value }))}
+            />
+            <button
+              type="button"
+              onClick={() => setShowApiKey(v => !v)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors"
+            >
+              {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+            </button>
+          </div>
+          <p className="text-xs text-slate-500">
+            Used for the economic calendar on the Market page. Price quotes (NQ, ES, GC, BTC) work without a key.
+          </p>
         </div>
 
         <div className="flex items-center gap-3 pt-2 border-t border-border">

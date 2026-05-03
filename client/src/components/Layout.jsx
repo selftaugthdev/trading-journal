@@ -1,12 +1,13 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, TableProperties, CalendarDays, Settings, TrendingUp } from 'lucide-react';
+import { LayoutDashboard, TableProperties, CalendarDays, Settings, TrendingUp, Newspaper } from 'lucide-react';
 import { cn } from '../lib/utils.js';
 
 const navItems = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/trades', icon: TableProperties, label: 'Trade Log' },
-  { to: '/calendar', icon: CalendarDays, label: 'Calendar' },
-  { to: '/settings', icon: Settings, label: 'Settings' },
+  { to: '/trades',    icon: TableProperties, label: 'Trade Log' },
+  { to: '/calendar',  icon: CalendarDays,    label: 'Calendar'  },
+  { to: '/market',    icon: Newspaper,       label: 'Market'    },
+  { to: '/settings',  icon: Settings,        label: 'Settings'  },
 ];
 
 export default function Layout() {

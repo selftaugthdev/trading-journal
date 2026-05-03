@@ -13,6 +13,7 @@ app.use('/api/accounts', require('./routes/accounts'));
 app.use('/api/tags', require('./routes/tags'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/analytics', require('./routes/analytics'));
+app.use('/api/market',   require('./routes/market'));
 
 app.use((err, req, res, next) => {
   console.error(err);
