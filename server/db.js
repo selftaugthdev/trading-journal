@@ -68,12 +68,65 @@ db.exec(`
   );
 `);
 
+// Migration: add external_id for import deduplication
+try {
+  db.exec('ALTER TABLE trades ADD COLUMN external_id TEXT');
+} catch (_) {}
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_external_id ON trades(external_id) WHERE external_id IS NOT NULL');
+
+// Migration: expand instrument CHECK constraint to include GC, MGC
+const _tradeSchema = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='trades'").get();
+if (_tradeSchema && !_tradeSchema.sql.includes("'GC'")) {
+  db.exec('DROP TABLE IF EXISTS _trades_gc_migration');
+  db.pragma('foreign_keys = OFF');
+  db.exec(`
+    BEGIN TRANSACTION;
+    ALTER TABLE trades RENAME TO _trades_gc_migration;
+    CREATE TABLE trades (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date_time TEXT NOT NULL,
+      instrument TEXT NOT NULL CHECK(instrument IN ('NQ','MNQ','GC','MGC')),
+      account_id INTEGER,
+      direction TEXT NOT NULL CHECK(direction IN ('Long','Short')),
+      entry_price REAL NOT NULL,
+      exit_price REAL NOT NULL,
+      contracts INTEGER NOT NULL DEFAULT 1,
+      commission REAL,
+      gross_pnl REAL,
+      net_pnl REAL,
+      setup_tag_id INTEGER,
+      planned_sl_ticks INTEGER,
+      planned_tp_ticks INTEGER,
+      actual_sl_hit INTEGER DEFAULT 0,
+      r_multiple REAL,
+      rating INTEGER CHECK(rating BETWEEN 1 AND 5),
+      notes TEXT,
+      screenshot TEXT,
+      session TEXT,
+      external_id TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE SET NULL,
+      FOREIGN KEY (setup_tag_id) REFERENCES tags(id) ON DELETE SET NULL
+    );
+    INSERT INTO trades SELECT id,date_time,instrument,account_id,direction,entry_price,exit_price,contracts,commission,gross_pnl,net_pnl,setup_tag_id,planned_sl_ticks,planned_tp_ticks,actual_sl_hit,r_multiple,rating,notes,screenshot,session,external_id,created_at,updated_at FROM _trades_gc_migration;
+    DROP TABLE _trades_gc_migration;
+    COMMIT;
+  `);
+  db.pragma('foreign_keys = ON');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_external_id ON trades(external_id) WHERE external_id IS NOT NULL');
+}
+
 const insertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
 [
   ['commission_nq', '4.20'],
   ['commission_mnq', '2.10'],
+  ['commission_gc', '2.50'],
+  ['commission_mgc', '0.50'],
   ['tick_value_nq', '5'],
   ['tick_value_mnq', '0.50'],
+  ['tick_value_gc', '10'],
+  ['tick_value_mgc', '1'],
   ['csv_format', 'manual'],
 ].forEach(([k, v]) => insertSetting.run(k, v));
 

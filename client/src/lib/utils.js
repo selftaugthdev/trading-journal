@@ -59,24 +59,26 @@ export function stars(rating) {
   return '★'.repeat(rating) + '☆'.repeat(5 - rating);
 }
 
+const POINT_VALUES = { NQ: 20, MNQ: 2, GC: 100, MGC: 10 };
+const COMMISSION_DEFAULTS = { NQ: 4.20, MNQ: 2.10, GC: 2.50, MGC: 0.50 };
+const TICK_VALUE_DEFAULTS = { NQ: 5, MNQ: 0.50, GC: 10, MGC: 1 };
+
 export function calcGrossPnL(instrument, direction, entry, exit, contracts) {
-  const pv = instrument === 'NQ' ? 20 : 2;
+  const pv = POINT_VALUES[instrument] ?? 20;
   const diff = direction === 'Long' ? exit - entry : entry - exit;
   return +(diff * contracts * pv).toFixed(2);
 }
 
 export function calcCommission(instrument, contracts, settings) {
-  const rate = instrument === 'NQ'
-    ? parseFloat(settings?.commission_nq ?? 4.20)
-    : parseFloat(settings?.commission_mnq ?? 2.10);
+  const key = `commission_${instrument?.toLowerCase()}`;
+  const rate = parseFloat(settings?.[key] ?? COMMISSION_DEFAULTS[instrument] ?? 0);
   return +(rate * contracts).toFixed(2);
 }
 
 export function calcRMultiple(netPnL, slTicks, instrument, contracts, settings) {
   if (!slTicks || slTicks <= 0) return null;
-  const tv = instrument === 'NQ'
-    ? parseFloat(settings?.tick_value_nq ?? 5)
-    : parseFloat(settings?.tick_value_mnq ?? 0.5);
+  const key = `tick_value_${instrument?.toLowerCase()}`;
+  const tv = parseFloat(settings?.[key] ?? TICK_VALUE_DEFAULTS[instrument] ?? 1);
   const risk = slTicks * tv * contracts;
   return risk > 0 ? +(netPnL / risk).toFixed(2) : null;
 }

@@ -7,14 +7,25 @@ const router = express.Router();
 
 function enrichTrade(body, settings) {
   const { instrument, direction, entry_price, exit_price, contracts,
-    planned_sl_ticks, commission: manualCommission } = body;
+    planned_sl_ticks, commission: manualCommission, gross_pnl: providedGross } = body;
 
+  const c = parseInt(contracts) || 1;
   const ep = parseFloat(entry_price);
   const xp = parseFloat(exit_price);
-  const c = parseInt(contracts) || 1;
+  const hasPrices = !isNaN(ep) && !isNaN(xp) && ep !== 0 && xp !== 0;
 
-  const gross_pnl = calcGrossPnL(instrument, direction, ep, xp, c);
-  const commission = manualCommission != null ? parseFloat(manualCommission) : calcCommission(instrument, c, settings);
+  let gross_pnl;
+  if (hasPrices) {
+    gross_pnl = calcGrossPnL(instrument, direction, ep, xp, c);
+  } else if (providedGross != null && providedGross !== '' && !isNaN(parseFloat(providedGross))) {
+    gross_pnl = parseFloat(providedGross);
+  } else {
+    gross_pnl = 0;
+  }
+
+  const commission = manualCommission != null && manualCommission !== ''
+    ? parseFloat(manualCommission)
+    : calcCommission(instrument, c, settings);
   const net_pnl = +(gross_pnl - commission).toFixed(2);
   const r_multiple = calcRMultiple(net_pnl, parseInt(planned_sl_ticks) || 0, instrument, c, settings);
   const session = body.session || determineSession(body.date_time);
@@ -126,7 +137,7 @@ router.post('/', (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     date_time, instrument, account_id || null, direction,
-    parseFloat(entry_price), parseFloat(exit_price), parseInt(contracts) || 1,
+    parseFloat(entry_price) || 0, parseFloat(exit_price) || 0, parseInt(contracts) || 1,
     enriched.commission, enriched.gross_pnl, enriched.net_pnl,
     setup_tag_id || null, parseInt(planned_sl_ticks) || null, parseInt(planned_tp_ticks) || null,
     actual_sl_hit ? 1 : 0, enriched.r_multiple, rating || null, notes || null,
@@ -164,7 +175,7 @@ router.put('/:id', (req, res) => {
     WHERE id=?
   `).run(
     date_time, instrument, account_id || null, direction,
-    parseFloat(entry_price), parseFloat(exit_price), parseInt(contracts) || 1,
+    parseFloat(entry_price) || 0, parseFloat(exit_price) || 0, parseInt(contracts) || 1,
     commission, enriched.gross_pnl, net_pnl,
     setup_tag_id || null, parseInt(planned_sl_ticks) || null, parseInt(planned_tp_ticks) || null,
     actual_sl_hit ? 1 : 0,
@@ -185,7 +196,7 @@ router.delete('/:id', (req, res) => {
 });
 
 router.post('/import', (req, res) => {
-  const { csv, format = 'manual' } = req.body;
+  const { csv, format = 'manual', account_id } = req.body;
   if (!csv) return res.status(400).json({ error: 'csv required' });
 
   const settings = getSettings(db);
@@ -197,6 +208,7 @@ router.post('/import', (req, res) => {
   }
 
   const inserted = [];
+  const skipped = [];
   const errors = [];
 
   const importOne = db.transaction((row, idx) => {
@@ -210,27 +222,47 @@ router.post('/import', (req, res) => {
         mapped = row;
       }
 
+      // Skip if already imported (dedup by external_id)
+      if (mapped.external_id) {
+        const existing = db.prepare('SELECT id FROM trades WHERE external_id = ?').get(mapped.external_id);
+        if (existing) { skipped.push(idx + 1); return; }
+      }
+
       const instrument = mapped.instrument || 'MNQ';
       const direction = mapped.direction || 'Long';
-      const entry_price = parseFloat(mapped.entry_price);
-      const exit_price = parseFloat(mapped.exit_price);
       const contracts = parseInt(mapped.contracts) || 1;
 
-      if (isNaN(entry_price) || isNaN(exit_price)) throw new Error('invalid prices');
+      const entryRaw = parseFloat(mapped.entry_price);
+      const exitRaw = parseFloat(mapped.exit_price);
+      const hasValidPrices = !isNaN(entryRaw) && !isNaN(exitRaw) && entryRaw !== 0;
+      const entry_price = hasValidPrices ? entryRaw : 0;
+      const exit_price = hasValidPrices ? exitRaw : 0;
 
-      const enriched = enrichTrade({ instrument, direction, entry_price, exit_price, contracts,
+      const grossRaw = mapped.gross_pnl != null ? String(mapped.gross_pnl).replace(/[$,]/g, '') : '';
+      const commRaw = mapped.commission != null ? String(mapped.commission).replace(/[$,]/g, '') : '';
+      const hasGross = grossRaw !== '' && !isNaN(parseFloat(grossRaw));
+
+      if (!hasValidPrices && !hasGross) throw new Error('missing prices and P&L');
+
+      const enriched = enrichTrade({
+        instrument, direction, entry_price, exit_price, contracts,
         date_time: mapped.date_time || new Date().toISOString(),
-        planned_sl_ticks: mapped.planned_sl_ticks }, settings);
+        planned_sl_ticks: mapped.planned_sl_ticks,
+        gross_pnl: hasGross ? parseFloat(grossRaw) : undefined,
+        commission: commRaw !== '' && !isNaN(parseFloat(commRaw)) ? parseFloat(commRaw) : undefined,
+      }, settings);
 
       const info = db.prepare(`
-        INSERT INTO trades (date_time, instrument, direction, entry_price, exit_price, contracts,
-          commission, gross_pnl, net_pnl, r_multiple, session, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO trades (date_time, instrument, account_id, direction, entry_price, exit_price,
+          contracts, commission, gross_pnl, net_pnl, r_multiple, session, notes, external_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        mapped.date_time || new Date().toISOString(), instrument, direction,
+        mapped.date_time || new Date().toISOString(),
+        instrument, account_id || null, direction,
         entry_price, exit_price, contracts,
         enriched.commission, enriched.gross_pnl, enriched.net_pnl,
-        enriched.r_multiple, enriched.session, mapped.notes || null
+        enriched.r_multiple, enriched.session, mapped.notes || null,
+        mapped.external_id || null
       );
       inserted.push(info.lastInsertRowid);
     } catch (e) {
@@ -239,30 +271,139 @@ router.post('/import', (req, res) => {
   });
 
   records.forEach((row, i) => importOne(row, i));
-  res.json({ imported: inserted.length, errors });
+  res.json({ imported: inserted.length, skipped: skipped.length, errors });
 });
 
+function parseTradovateDateTime(str) {
+  if (!str || !str.trim()) return new Date().toISOString().slice(0, 16);
+  const s = str.trim();
+  // ISO-like: 2026-05-01T19:58:47 or 2026-05-01 19:58:47
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+    const d = new Date(s.replace(' ', 'T'));
+    return isNaN(d.getTime()) ? new Date().toISOString().slice(0, 16) : d.toISOString().slice(0, 16);
+  }
+  // MM/DD/YYYY HH:MM:SS or M/D/YYYY H:MM:SS (Tradovate performance export)
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*([AP]M))?/i);
+  if (m) {
+    let [, mon, day, year, hr, min, sec, ampm] = m;
+    hr = parseInt(hr);
+    if (ampm) {
+      const ispm = ampm.toUpperCase() === 'PM';
+      if (ispm && hr !== 12) hr += 12;
+      if (!ispm && hr === 12) hr = 0;
+    }
+    return `${year}-${mon.padStart(2,'0')}-${day.padStart(2,'0')}T${String(hr).padStart(2,'0')}:${min}:${sec || '00'}`;
+  }
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? new Date().toISOString().slice(0, 16) : d.toISOString().slice(0, 16);
+}
+
+// Parses Tradovate pnl strings: "$65.00" → 65, "$(115.00)" → -115
+function parseTradovatePnL(str) {
+  if (str == null || str === '') return null;
+  const s = String(str).replace(/\s/g, '');
+  const isNeg = s.includes('(');
+  const num = parseFloat(s.replace(/[$(),]/g, ''));
+  return isNaN(num) ? null : (isNeg ? -num : num);
+}
+
+function detectInstrument(symbol) {
+  const s = (symbol || '').toUpperCase();
+  if (s.startsWith('MNQ')) return 'MNQ';
+  if (s.startsWith('NQ'))  return 'NQ';
+  if (s.startsWith('MGC')) return 'MGC';
+  if (s.startsWith('GC'))  return 'GC';
+  return 'MNQ';
+}
+
 function mapTradovate(row) {
+  // ── Tradovate Performance export ──────────────────────────────────────────
+  // Columns: symbol, _priceFormat, _priceFormatType, _tickSize,
+  //          buyFillId, sellFillId, qty, buyPrice, sellPrice,
+  //          pnl, boughtTimestamp, soldTimestamp, duration
+  if (row['symbol'] !== undefined && row['boughtTimestamp'] !== undefined) {
+    const symbol = (row['symbol'] || '').toUpperCase();
+    const instrument = detectInstrument(symbol);
+
+    const buyPrice = parseFloat(row['buyPrice']);
+    const sellPrice = parseFloat(row['sellPrice']);
+    const qty = parseInt(row['qty']) || 1;
+
+    // Direction: if soldTimestamp < boughtTimestamp → Short (sold first, then covered)
+    const buyISO = parseTradovateDateTime(row['boughtTimestamp']);
+    const sellISO = parseTradovateDateTime(row['soldTimestamp']);
+    const isShort = sellISO < buyISO;
+
+    const direction = isShort ? 'Short' : 'Long';
+    const entryPrice = isShort ? sellPrice : buyPrice;
+    const exitPrice  = isShort ? buyPrice  : sellPrice;
+    const entryDateTime = isShort ? row['soldTimestamp'] : row['boughtTimestamp'];
+
+    const buyFillId = row['buyFillId'] || row['buyFillID'] || '';
+    const sellFillId = row['sellFillId'] || row['sellFillID'] || '';
+    return {
+      date_time: parseTradovateDateTime(entryDateTime),
+      instrument,
+      direction,
+      entry_price: entryPrice,
+      exit_price: exitPrice,
+      contracts: qty,
+      gross_pnl: parseTradovatePnL(row['pnl']),
+      commission: '',   // not in this export — auto-calculated from settings
+      external_id: buyFillId && sellFillId ? `${buyFillId}_${sellFillId}` : null,
+    };
+  }
+
+  // ── Tradovate P&L Report (older / alternate export) ───────────────────────
+  // Columns: Contract Name, B/S, Open Date/Time, Open Price, Close Price,
+  //          Gross P&L, Commission, Net P&L
+  const contract = row['Contract Name'] || row['Contract'] || row['Symbol'] || row['Instrument'] || '';
+  const instrument = detectInstrument(contract);
+
+  const bs = (row['B/S'] || row['Action'] || row['Side'] || row['Buy/Sell'] || '').trim().toUpperCase();
+  const direction = ['B', 'BUY', 'LONG', 'BUY LONG'].includes(bs) ? 'Long' : 'Short';
+
+  const rawDate = row['Open Date/Time'] || row['Buy Date/Time'] || row['Open Time'] ||
+    row['Entry Date/Time'] || row['Date/Time'] || row['Timestamp'] || row['timestamp'] ||
+    row['DateTime'] || row['Date'] || '';
+
+  const entryPrice = row['Open Price'] || row['Avg. Buy Price'] || row['Buy Price'] ||
+    row['Entry Price'] || row['Avg Entry Price'] || row['Fill Price'] || '';
+  const exitPrice = row['Close Price'] || row['Avg. Sell Price'] || row['Sell Price'] ||
+    row['Exit Price'] || row['Avg Exit Price'] || '';
+
+  const qty = row['Open Qty'] || row['Buy Qty'] || row['Qty'] || row['Quantity'] || row['Size'] || '1';
+
+  const grossPnL = row['Gross P&L'] || row['Gross PnL'] || row['GrossPnL'] || row['Gross P/L'] || '';
+  const commission = row['Commission'] || row['Fees'] || row['Fee'] || '';
+  const netPnL = row['Net P&L'] || row['Net PnL'] || row['NetPnL'] || row['Net P/L'] ||
+    row['Realized P&L'] || row['Realized PnL'] || row['realizedPnl'] || '';
+
   return {
-    date_time: row['Buy/Sell Time'] || row['Entry Time'] || new Date().toISOString(),
-    instrument: (row['Contract'] || '').includes('NQ') ?
-      ((row['Contract'] || '').includes('MNQ') ? 'MNQ' : 'NQ') : 'MNQ',
-    direction: row['B/S'] === 'B' || row['B/S'] === 'Buy' ? 'Long' : 'Short',
-    entry_price: row['Avg Entry Price'] || row['Entry Price'],
-    exit_price: row['Avg Exit Price'] || row['Exit Price'],
-    contracts: row['Qty'] || row['Quantity'],
+    date_time: parseTradovateDateTime(rawDate),
+    instrument,
+    direction,
+    entry_price: entryPrice,
+    exit_price: exitPrice,
+    contracts: qty,
+    gross_pnl: grossPnL,
+    commission,
+    net_pnl: netPnL,
   };
 }
 
 function mapRithmic(row) {
+  const dateStr = row['Entry Date'] && row['Entry Time']
+    ? `${row['Entry Date']}T${row['Entry Time']}`
+    : row['Date'] || '';
   return {
-    date_time: `${row['Entry Date']}T${row['Entry Time']}` || new Date().toISOString(),
-    instrument: (row['Symbol'] || '').includes('NQ') ?
-      ((row['Symbol'] || '').includes('MNQ') ? 'MNQ' : 'NQ') : 'MNQ',
-    direction: row['Side'] === 'Buy' ? 'Long' : 'Short',
-    entry_price: row['Entry Price'],
-    exit_price: row['Exit Price'],
-    contracts: row['Qty'],
+    date_time: parseTradovateDateTime(dateStr),
+    instrument: (row['Symbol'] || '').toUpperCase().includes('MNQ') ? 'MNQ'
+      : (row['Symbol'] || '').toUpperCase().includes('NQ') ? 'NQ' : 'MNQ',
+    direction: (row['Side'] || '').toUpperCase() === 'BUY' ? 'Long' : 'Short',
+    entry_price: row['Entry Price'] || '',
+    exit_price: row['Exit Price'] || '',
+    contracts: row['Qty'] || '1',
   };
 }
 

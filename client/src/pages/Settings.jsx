@@ -178,8 +178,12 @@ export default function Settings() {
   const [settings, setSettings] = useState({
     commission_nq: '4.20',
     commission_mnq: '2.10',
+    commission_gc: '2.50',
+    commission_mgc: '0.50',
     tick_value_nq: '5',
     tick_value_mnq: '0.50',
+    tick_value_gc: '10',
+    tick_value_mgc: '1',
     csv_format: 'manual',
     finnhub_api_key: '',
   });
@@ -275,34 +279,29 @@ export default function Settings() {
         </div>
 
         <div className="grid grid-cols-2 gap-6">
-          <div className="space-y-3">
-            <h3 className="text-sm font-medium text-slate-400 border-b border-border pb-2">NQ (E-mini NASDAQ)</h3>
-            <div>
-              <label className="label">Commission per contract (round trip) $</label>
-              <input type="number" step="0.01" className="input font-mono" value={settings.commission_nq}
-                onChange={e => setSettings(s => ({ ...s, commission_nq: e.target.value }))} />
+          {[
+            { key: 'nq',  label: 'NQ (E-mini NASDAQ)',       hint: '$5/tick · $20/point · 4 ticks/point' },
+            { key: 'mnq', label: 'MNQ (Micro E-mini NASDAQ)', hint: '$0.50/tick · $2/point · 4 ticks/point' },
+            { key: 'gc',  label: 'GC (Gold Futures)',         hint: '$10/tick · $100/point · 10 ticks/point' },
+            { key: 'mgc', label: 'MGC (Micro Gold)',          hint: '$1/tick · $10/point · 10 ticks/point' },
+          ].map(({ key, label, hint }) => (
+            <div key={key} className="space-y-3">
+              <h3 className="text-sm font-medium text-slate-400 border-b border-border pb-2">{label}</h3>
+              <div>
+                <label className="label">Commission per contract (round trip) $</label>
+                <input type="number" step="0.01" className="input font-mono"
+                  value={settings[`commission_${key}`] ?? ''}
+                  onChange={e => setSettings(s => ({ ...s, [`commission_${key}`]: e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">Tick value $</label>
+                <input type="number" step="0.01" className="input font-mono"
+                  value={settings[`tick_value_${key}`] ?? ''}
+                  onChange={e => setSettings(s => ({ ...s, [`tick_value_${key}`]: e.target.value }))} />
+                <p className="text-xs text-slate-500 mt-1">{hint}</p>
+              </div>
             </div>
-            <div>
-              <label className="label">Tick value $</label>
-              <input type="number" step="0.01" className="input font-mono" value={settings.tick_value_nq}
-                onChange={e => setSettings(s => ({ ...s, tick_value_nq: e.target.value }))} />
-              <p className="text-xs text-slate-500 mt-1">NQ: $5/tick = $20/point (4 ticks/point)</p>
-            </div>
-          </div>
-          <div className="space-y-3">
-            <h3 className="text-sm font-medium text-slate-400 border-b border-border pb-2">MNQ (Micro E-mini NASDAQ)</h3>
-            <div>
-              <label className="label">Commission per contract (round trip) $</label>
-              <input type="number" step="0.01" className="input font-mono" value={settings.commission_mnq}
-                onChange={e => setSettings(s => ({ ...s, commission_mnq: e.target.value }))} />
-            </div>
-            <div>
-              <label className="label">Tick value $</label>
-              <input type="number" step="0.01" className="input font-mono" value={settings.tick_value_mnq}
-                onChange={e => setSettings(s => ({ ...s, tick_value_mnq: e.target.value }))} />
-              <p className="text-xs text-slate-500 mt-1">MNQ: $0.50/tick = $2/point (4 ticks/point)</p>
-            </div>
-          </div>
+          ))}
         </div>
 
         <div>

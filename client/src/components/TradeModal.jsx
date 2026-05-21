@@ -66,8 +66,8 @@ export default function TradeModal({ trade, onClose, onSaved }) {
         instrument: trade.instrument || 'MNQ',
         account_id: trade.account_id || '',
         direction: trade.direction || 'Long',
-        entry_price: trade.entry_price ?? '',
-        exit_price: trade.exit_price ?? '',
+        entry_price: trade.entry_price || '',
+        exit_price: trade.exit_price || '',
         contracts: trade.contracts ?? '1',
         commission: trade.commission ?? '',
         gross_pnl: trade.gross_pnl ?? '',
@@ -90,12 +90,12 @@ export default function TradeModal({ trade, onClose, onSaved }) {
     }
   }, [trade]);
 
-  // Auto-calculate derived fields
+  // Auto-calculate from prices when both are provided
   useEffect(() => {
     const ep = parseFloat(form.entry_price);
     const xp = parseFloat(form.exit_price);
     const c = parseInt(form.contracts) || 1;
-    if (!isNaN(ep) && !isNaN(xp) && form.instrument && form.direction) {
+    if (!isNaN(ep) && !isNaN(xp) && ep !== 0 && form.instrument && form.direction) {
       const gross = calcGrossPnL(form.instrument, form.direction, ep, xp, c);
       const comm = manualCommission && form.commission !== ''
         ? parseFloat(form.commission)
@@ -113,6 +113,20 @@ export default function TradeModal({ trade, onClose, onSaved }) {
     }
   }, [form.entry_price, form.exit_price, form.contracts, form.direction,
     form.instrument, form.planned_sl_ticks, settings]);
+
+  // Recalc net/R when gross P&L is manually entered (price-free mode)
+  useEffect(() => {
+    if (form.entry_price !== '' || form.exit_price !== '') return;
+    if (form.gross_pnl === '' || isNaN(parseFloat(form.gross_pnl))) return;
+    const c = parseInt(form.contracts) || 1;
+    const comm = manualCommission && form.commission !== ''
+      ? parseFloat(form.commission)
+      : calcCommission(form.instrument, c, settings);
+    const net = +(parseFloat(form.gross_pnl) - comm).toFixed(2);
+    const sl = parseInt(form.planned_sl_ticks) || 0;
+    const r = calcRMultiple(net, sl, form.instrument, c, settings);
+    setForm(prev => ({ ...prev, commission: manualCommission ? prev.commission : comm, net_pnl: net, r_multiple: r ?? '' }));
+  }, [form.gross_pnl, form.entry_price, form.exit_price, form.contracts, form.instrument, form.planned_sl_ticks, settings]);
 
   // Recalc net when commission manually changed
   useEffect(() => {
@@ -141,8 +155,9 @@ export default function TradeModal({ trade, onClose, onSaved }) {
     try {
       const payload = {
         ...form,
-        entry_price: parseFloat(form.entry_price),
-        exit_price: parseFloat(form.exit_price),
+        entry_price: form.entry_price !== '' ? parseFloat(form.entry_price) : 0,
+        exit_price: form.exit_price !== '' ? parseFloat(form.exit_price) : 0,
+        gross_pnl: form.gross_pnl !== '' ? parseFloat(form.gross_pnl) : null,
         contracts: parseInt(form.contracts) || 1,
         account_id: form.account_id || null,
         setup_tag_id: form.setup_tag_id || null,
@@ -194,6 +209,8 @@ export default function TradeModal({ trade, onClose, onSaved }) {
               <select className="select" value={form.instrument} onChange={e => set('instrument', e.target.value)}>
                 <option value="MNQ">MNQ</option>
                 <option value="NQ">NQ</option>
+                <option value="MGC">MGC</option>
+                <option value="GC">GC</option>
               </select>
             </div>
             <div>
@@ -225,14 +242,14 @@ export default function TradeModal({ trade, onClose, onSaved }) {
           {/* Row 2: Prices and Contracts */}
           <div className="grid grid-cols-3 gap-4">
             <div>
-              <label className="label">Entry Price</label>
-              <input type="number" step="0.25" className="input font-mono" placeholder="0.00"
-                value={form.entry_price} onChange={e => set('entry_price', e.target.value)} required />
+              <label className="label">Entry Price <span className="text-slate-600 font-normal">(optional)</span></label>
+              <input type="number" step="0.25" className="input font-mono" placeholder="leave blank to enter $ P&L"
+                value={form.entry_price} onChange={e => set('entry_price', e.target.value)} />
             </div>
             <div>
-              <label className="label">Exit Price</label>
-              <input type="number" step="0.25" className="input font-mono" placeholder="0.00"
-                value={form.exit_price} onChange={e => set('exit_price', e.target.value)} required />
+              <label className="label">Exit Price <span className="text-slate-600 font-normal">(optional)</span></label>
+              <input type="number" step="0.25" className="input font-mono" placeholder="leave blank to enter $ P&L"
+                value={form.exit_price} onChange={e => set('exit_price', e.target.value)} />
             </div>
             <div>
               <label className="label">Contracts</label>
@@ -242,13 +259,26 @@ export default function TradeModal({ trade, onClose, onSaved }) {
           </div>
 
           {/* Row 3: P&L display */}
+          {(() => {
+            const noPrices = form.entry_price === '' && form.exit_price === '';
+            return (
           <div className="grid grid-cols-3 gap-4">
             <div>
-              <label className="label">Gross P&L</label>
+              <label className="label">
+                Gross P&L
+                {noPrices && <span className="text-violet-400 text-xs ml-1">— enter directly</span>}
+              </label>
+              {noPrices ? (
+                <input type="number" step="0.01" className={cn('input font-mono',
+                  form.gross_pnl === '' ? 'text-slate-400' : parseFloat(form.gross_pnl) >= 0 ? 'text-profit' : 'text-loss')}
+                  placeholder="0.00" value={form.gross_pnl}
+                  onChange={e => set('gross_pnl', e.target.value)} />
+              ) : (
               <div className={cn('input font-mono cursor-default', form.gross_pnl === '' ? 'text-slate-500' :
                 form.gross_pnl >= 0 ? 'text-profit' : 'text-loss')}>
                 {form.gross_pnl !== '' ? formatCurrency(form.gross_pnl) : '—'}
               </div>
+              )}
             </div>
             <div>
               <label className="label flex justify-between">
@@ -271,6 +301,8 @@ export default function TradeModal({ trade, onClose, onSaved }) {
               </div>
             </div>
           </div>
+            );
+          })()}
 
           {/* Row 4: Setup, SL/TP, R */}
           <div className="grid grid-cols-4 gap-4">

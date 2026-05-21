@@ -328,7 +328,7 @@ export default function Market() {
     setRefreshing(false);
   }
 
-  const TICKER_ORDER = ['NQ', 'MNQ', 'ES', 'GC', 'BTC'];
+  const TICKER_ORDER = ['NQ', 'CL', 'ES', 'GC', 'BTC'];
 
   return (
     <div className="p-6 space-y-5">

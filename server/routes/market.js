@@ -3,9 +3,46 @@ const https = require('https');
 const db = require('../db');
 const router = express.Router();
 
-// In-memory cache to avoid hammering external APIs
 const cache = {};
 const TTL = { quotes: 30_000, calendar: 3_600_000 };
+
+// Stooq live quote (CSV) — works without auth, no rate limits
+async function fetchStooq(stooqSymbol) {
+  const url = `https://stooq.com/q/l/?s=${stooqSymbol}&f=sd2t2ohlcv&h&e=csv`;
+  const r = await fetch(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'text/csv,text/plain' },
+  });
+  const text = await r.text();
+  const lines = text.trim().split('\n');
+  if (lines.length < 2) return null;
+  const [, date, time, open, high, low, close] = lines[1].split(',');
+  if (close === 'N/D') return null;
+  const price     = parseFloat(close);
+  const openPrice = parseFloat(open);
+  const change        = +(price - openPrice).toFixed(2);
+  const changePercent = +((price - openPrice) / openPrice * 100).toFixed(4);
+  return {
+    price, change, changePercent,
+    prevClose: openPrice,
+    dayHigh: parseFloat(high), dayLow: parseFloat(low),
+    updatedAt: date && time ? new Date(`${date}T${time}`).toISOString() : null,
+  };
+}
+
+// CoinGecko for BTC — free, no auth, includes 24h change
+async function fetchBTC() {
+  const r = await fetch(
+    'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true',
+    { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } },
+  );
+  const d = await r.json();
+  const price         = d?.bitcoin?.usd ?? null;
+  const changePercent = d?.bitcoin?.usd_24h_change ?? null;
+  const change        = price != null && changePercent != null
+    ? +(price / (1 + changePercent / 100) * (changePercent / 100)).toFixed(2)
+    : null;
+  return { price, change, changePercent: changePercent ? +changePercent.toFixed(4) : null, prevClose: null };
+}
 
 function fetchJson(url) {
   return new Promise((resolve, reject) => {
@@ -19,58 +56,45 @@ function fetchJson(url) {
       res.on('data', c => (raw += c));
       res.on('end', () => {
         try { resolve(JSON.parse(raw)); }
-        catch (e) { reject(new Error('JSON parse failed')); }
+        catch { reject(new Error('JSON parse failed')); }
       });
     }).on('error', reject);
   });
 }
 
 const TICKERS = [
-  { symbol: 'NQ=F',    label: 'NQ',  name: 'E-mini NASDAQ' },
-  { symbol: 'MNQ=F',   label: 'MNQ', name: 'Micro NASDAQ'  },
-  { symbol: 'ES=F',    label: 'ES',  name: 'E-mini S&P 500' },
-  { symbol: 'GC=F',    label: 'GC',  name: 'Gold Futures'  },
-  { symbol: 'BTC-USD', label: 'BTC', name: 'Bitcoin'       },
+  { label: 'NQ',  name: 'E-mini NASDAQ',  stooq: 'nq.f'  },
+  { label: 'CL',  name: 'Crude Oil',      stooq: 'cl.f'  },
+  { label: 'ES',  name: 'E-mini S&P 500', stooq: 'es.f'  },
+  { label: 'GC',  name: 'Gold Futures',   stooq: 'gc.f'  },
+  { label: 'BTC', name: 'Bitcoin',        stooq: null    },
 ];
 
-router.get('/quotes', async (req, res) => {
+router.get('/quotes', async (_req, res) => {
   const now = Date.now();
   if (cache.quotes && now - cache.quotesAt < TTL.quotes) return res.json(cache.quotes);
 
   try {
-    const syms = TICKERS.map(t => t.symbol).join(',');
-    const fields = [
-      'regularMarketPrice', 'regularMarketChange', 'regularMarketChangePercent',
-      'regularMarketPreviousClose', 'regularMarketTime', 'regularMarketDayHigh',
-      'regularMarketDayLow', 'regularMarketVolume',
-    ].join(',');
-    const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${syms}&fields=${fields}`;
-    const data = await fetchJson(url);
-    const results = data?.quoteResponse?.result || [];
+    const results = await Promise.all(
+      TICKERS.map(async ({ label, name, stooq }) => {
+        try {
+          const q = stooq ? await fetchStooq(stooq) : await fetchBTC();
+          return { label, name, ...(q || { price: null, change: null, changePercent: null, prevClose: null }) };
+        } catch {
+          return { label, name, price: null, change: null, changePercent: null, prevClose: null };
+        }
+      })
+    );
 
-    const quotes = TICKERS.map(({ symbol, label, name }) => {
-      const q = results.find(r => r.symbol === symbol) || {};
-      return {
-        symbol, label, name,
-        price:         q.regularMarketPrice         ?? null,
-        change:        q.regularMarketChange        ?? null,
-        changePercent: q.regularMarketChangePercent ?? null,
-        prevClose:     q.regularMarketPreviousClose ?? null,
-        dayHigh:       q.regularMarketDayHigh       ?? null,
-        dayLow:        q.regularMarketDayLow        ?? null,
-        updatedAt:     q.regularMarketTime ? new Date(q.regularMarketTime * 1000).toISOString() : null,
-      };
-    });
-
-    cache.quotes = quotes;
+    cache.quotes = results;
     cache.quotesAt = now;
-    res.json(quotes);
+    res.json(results);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-router.get('/calendar', async (req, res) => {
+router.get('/calendar', async (_req, res) => {
   const settings = Object.fromEntries(
     db.prepare('SELECT key, value FROM settings').all().map(r => [r.key, r.value])
   );
@@ -80,9 +104,8 @@ router.get('/calendar', async (req, res) => {
   const now = Date.now();
   if (cache.calendar && now - cache.calendarAt < TTL.calendar) return res.json(cache.calendar);
 
-  // Mon–Sun of current week
   const today = new Date();
-  const dow = today.getDay(); // 0=Sun
+  const dow = today.getDay();
   const mon = new Date(today);
   mon.setDate(today.getDate() - (dow === 0 ? 6 : dow - 1));
   const sun = new Date(mon);
@@ -105,9 +128,7 @@ router.get('/calendar', async (req, res) => {
   }
 });
 
-// Bust calendar cache (called after API key is saved in settings)
-router.post('/calendar/refresh', (req, res) => {
-  cache.calendar = null;
+router.post('/calendar/refresh', (_req, res) => {
   cache.calendar = null;
   res.json({ ok: true });
 });

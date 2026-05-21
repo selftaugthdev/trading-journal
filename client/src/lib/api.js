@@ -20,7 +20,7 @@ export const api = {
   createTrade: (data) => request('/trades', { method: 'POST', body: data }),
   updateTrade: (id, data) => request(`/trades/${id}`, { method: 'PUT', body: data }),
   deleteTrade: (id) => request(`/trades/${id}`, { method: 'DELETE' }),
-  importTrades: (csv, format) => request('/trades/import', { method: 'POST', body: { csv, format } }),
+  importTrades: (csv, format, accountId) => request('/trades/import', { method: 'POST', body: { csv, format, account_id: accountId || null } }),
   exportTrades: () => fetch('/api/trades/export').then(r => r.blob()),
 
   // Market

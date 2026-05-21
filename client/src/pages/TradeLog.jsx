@@ -7,7 +7,7 @@ import DatePicker from '../components/DatePicker.jsx';
 
 const SESSIONS = ['London', 'NY', 'Overnight'];
 const DIRECTIONS = ['Long', 'Short'];
-const INSTRUMENTS = ['NQ', 'MNQ'];
+const INSTRUMENTS = ['NQ', 'MNQ', 'GC', 'MGC'];
 const RATINGS = [1, 2, 3, 4, 5];
 
 function SortIcon({ col, sort, order }) {
@@ -39,7 +39,8 @@ export default function TradeLog() {
   const [editTrade, setEditTrade] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const [importCsv, setImportCsv] = useState('');
-  const [importFormat, setImportFormat] = useState('manual');
+  const [importFormat, setImportFormat] = useState('tradovate');
+  const [importAccountId, setImportAccountId] = useState('');
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
   const [accounts, setAccounts] = useState([]);
@@ -112,7 +113,7 @@ export default function TradeLog() {
     setImporting(true);
     setImportResult(null);
     try {
-      const result = await api.importTrades(importCsv, importFormat);
+      const result = await api.importTrades(importCsv, importFormat, importAccountId || null);
       setImportResult(result);
       if (result.imported > 0) loadTrades();
     } catch (e) {
@@ -255,8 +256,8 @@ export default function TradeLog() {
                   </td>
                   <td className="px-3 py-2.5 text-slate-400">{trade.account?.name || '—'}</td>
                   <td className={cn('px-3 py-2.5 font-medium', directionColor(trade.direction))}>{trade.direction}</td>
-                  <td className="px-3 py-2.5 font-mono text-slate-300">{trade.entry_price?.toLocaleString()}</td>
-                  <td className="px-3 py-2.5 font-mono text-slate-300">{trade.exit_price?.toLocaleString()}</td>
+                  <td className="px-3 py-2.5 font-mono text-slate-300">{trade.entry_price ? trade.entry_price.toLocaleString() : '—'}</td>
+                  <td className="px-3 py-2.5 font-mono text-slate-300">{trade.exit_price ? trade.exit_price.toLocaleString() : '—'}</td>
                   <td className="px-3 py-2.5 text-slate-400">{trade.contracts}</td>
                   <td className={cn('px-3 py-2.5 font-mono', pnlClass(trade.gross_pnl))}>{formatCurrency(trade.gross_pnl)}</td>
                   <td className="px-3 py-2.5 font-mono text-slate-500">{formatCurrency(trade.commission, false)}</td>
@@ -340,41 +341,67 @@ export default function TradeLog() {
           <div className="bg-surface-2 border border-border rounded-xl w-full max-w-2xl shadow-2xl">
             <div className="flex items-center justify-between px-6 py-4 border-b border-border">
               <h2 className="text-lg font-semibold text-slate-100">Import Trades (CSV)</h2>
-              <button onClick={() => { setShowImport(false); setImportResult(null); setImportCsv(''); }} className="btn-ghost p-1.5 rounded-lg">
+              <button onClick={() => { setShowImport(false); setImportResult(null); setImportCsv(''); setImportAccountId(''); }} className="btn-ghost p-1.5 rounded-lg">
                 <X size={18} />
               </button>
             </div>
             <div className="p-6 space-y-4">
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-end gap-3">
                 <div>
                   <label className="label">Format</label>
                   <select className="select w-40" value={importFormat} onChange={e => setImportFormat(e.target.value)}>
-                    <option value="manual">Manual / Generic</option>
                     <option value="tradovate">Tradovate</option>
                     <option value="rithmic">Rithmic</option>
+                    <option value="manual">Manual / Generic</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Account</label>
+                  <select className="select w-40" value={importAccountId} onChange={e => setImportAccountId(e.target.value)}>
+                    <option value="">— None —</option>
+                    {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                   </select>
                 </div>
                 <div className="flex-1" />
-                <div className="pt-5">
+                <div>
                   <input type="file" accept=".csv" ref={fileRef} onChange={handleFileRead} className="hidden" />
                   <button className="btn-secondary" onClick={() => fileRef.current.click()}>
                     <Upload size={14} /> Load CSV File
                   </button>
                 </div>
               </div>
+              {importFormat === 'tradovate' && (
+                <div className="bg-surface-3 border border-border rounded-lg p-3 text-xs text-slate-400 space-y-1">
+                  <p className="text-slate-300 font-medium mb-1">How to export from Tradovate:</p>
+                  <p>1. Log in → click <span className="text-slate-200">Performance</span> in the left sidebar (or bottom panel)</p>
+                  <p>2. Set your <span className="text-slate-200">date range</span> → click <span className="text-slate-200">Export CSV</span></p>
+                  <p>3. The file will be named something like <span className="text-slate-200">Performance-may-2026.csv</span></p>
+                  <p className="text-slate-500 pt-1">Expected columns: symbol, qty, buyPrice, sellPrice, pnl, boughtTimestamp, soldTimestamp</p>
+                  <p className="text-slate-500">Direction and entry/exit prices are auto-detected from timestamps.</p>
+                </div>
+              )}
               <div>
                 <label className="label">CSV Content</label>
-                <textarea className="input h-48 font-mono text-xs resize-none" placeholder="Paste CSV here or load file above..."
+                <textarea className="input h-40 font-mono text-xs resize-none" placeholder="Paste CSV here or load file above..."
                   value={importCsv} onChange={e => setImportCsv(e.target.value)} />
               </div>
               {importResult && (
-                <div className={cn('p-3 rounded-lg text-sm', importResult.imported > 0 ? 'bg-emerald-900/30 text-emerald-300' : 'bg-red-900/30 text-red-300')}>
-                  Imported {importResult.imported} trade(s).
-                  {importResult.errors?.length > 0 && ` ${importResult.errors.length} error(s).`}
+                <div className={cn('p-3 rounded-lg text-sm', importResult.imported > 0 ? 'bg-emerald-900/30 text-emerald-300' : importResult.skipped > 0 ? 'bg-surface-3 text-slate-400' : 'bg-red-900/30 text-red-300')}>
+                  {importResult.imported > 0 && <p>Imported {importResult.imported} trade(s).</p>}
+                  {importResult.skipped > 0 && <p className="text-slate-400">{importResult.skipped} already imported — skipped.</p>}
+                  {importResult.imported === 0 && importResult.skipped === 0 && <p>No trades imported.</p>}
+                  {importResult.errors?.length > 0 && (
+                    <div className="text-xs text-red-400 mt-1 space-y-0.5">
+                      {importResult.errors.slice(0, 5).map((e, i) => (
+                        <p key={i}>Row {e.row}: {e.error}</p>
+                      ))}
+                      {importResult.errors.length > 5 && <p>…and {importResult.errors.length - 5} more</p>}
+                    </div>
+                  )}
                 </div>
               )}
               <div className="flex justify-end gap-3 border-t border-border pt-4">
-                <button className="btn-secondary" onClick={() => { setShowImport(false); setImportResult(null); setImportCsv(''); }}>Cancel</button>
+                <button className="btn-secondary" onClick={() => { setShowImport(false); setImportResult(null); setImportCsv(''); setImportAccountId(''); }}>Cancel</button>
                 <button className="btn-primary" onClick={handleImport} disabled={importing || !importCsv.trim()}>
                   {importing ? 'Importing…' : 'Import'}
                 </button>
